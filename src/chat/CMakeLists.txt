@@ -1,7 +1,7 @@
 set(server_target_name server)
 set(client_target_name client)
 
-add_executable(${server_target_name} server/sm_server.cpp)
+add_executable(${server_target_name} server/server_q.cpp)
 add_executable(${client_target_name} client/client.cpp)
 
 target_include_directories(
@@ -16,4 +16,5 @@ target_include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-target_link_libraries(${server_target_name} rt)
+target_link_libraries(${server_target_name} rt pthread)
+target_link_libraries(${client_target_name} pthread)
