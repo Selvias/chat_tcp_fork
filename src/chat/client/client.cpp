@@ -12,8 +12,7 @@ const int MAX_USERNAME_LEN = 20;
 int new_socket;
 char message[MAX_MESSAGE_SIZE];
 std::string full_message;
-int is_it_me = 1;
-pthread_mutex_t mutex;
+int is_it_me = 0;
 
 void *receive_messages(void *arg) {
   int bytes_read;
@@ -28,7 +27,7 @@ void *receive_messages(void *arg) {
       break;
     } else {
       if (is_it_me) {
-        is_it_me = false;
+        is_it_me = 0;
         continue;
       }
       message[bytes_read] = '\0';
@@ -47,9 +46,7 @@ void *send_messages(void *arg) {
   send(new_socket, username, MAX_USERNAME_LEN, 0);
   while (true) {
     // Get input from the user
-    is_it_me = false;
     if (fgets(message, MAX_MESSAGE_SIZE, stdin) != 0) {
-      is_it_me = true;
       // Send the message to the server
       full_message += username;
       full_message += ": ";
@@ -59,6 +56,7 @@ void *send_messages(void *arg) {
         perror("Error sending message");
         break;
       }
+      is_it_me = 1;
       full_message = "";
     }
   }
