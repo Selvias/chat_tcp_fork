@@ -11,7 +11,6 @@
 #include <unistd.h>
 #include <vector>
 
-#define PORT 8080
 #define MAX_CLIENTS 10
 #define SHM_SIZE (MAX_CLIENTS * sizeof(int))
 #define MAX_NAME_LENGTH 20
@@ -32,7 +31,7 @@ int msgid;
 key_t key;
 message msg;
 
-// shared data (logic)
+// shared data (program logic)
 int *client_fds;
 int *client_lost_cnnct;
 client_data *client_dt;
@@ -51,18 +50,15 @@ void reaper(int signal) {
 }
 
 void cleanup(int signal) {
-  // detach and remove shared memory segments
-  // shmdt(clients);
+  // Detach and remove shared memory segment
   shmdt(client_fds);
-  // shmdt(client_lost_cnnct);
+  shmdt(client_lost_cnnct);
+  shmdt(client_dt);
+
+  // Remove message queue
+  msgctl(msgid, IPC_RMID, NULL);
   for (const int &shmid : shmid_list) {
-    if (shmctl(shmid, IPC_RMID, NULL) == -1) {
-      std::cerr << "Failed to remove shared memory segment with shmid " << shmid
-                << std::endl;
-    } else {
-      std::cout << "Removed shared memory segment with shmid " << shmid
-                << std::endl;
-    }
+    shmctl(shmid, IPC_RMID, NULL);
   }
   exit(0);
 }
@@ -126,7 +122,7 @@ int add_client(int client_socket, char *username) {
   }
   if (i == MAX_CLIENTS) {
     std::cerr << "Max clients reached\n";
-    // close(client_socket);
+    close(client_socket);
     return 1;
   }
   return 0;
@@ -135,13 +131,9 @@ int add_client(int client_socket, char *username) {
 int clear_client() {
   for (int i = 0; i < MAX_CLIENTS; i++) {
     if (client_lost_cnnct[i] == -1 && client_fds[i] != 0) {
-      // if (client_dt[i].is_connected == false && client_fds[i] != 0) {
-      std::cout << "close connection with descriptor: " << client_fds[i]
-                << std::endl;
       // close(client_fds[i]);
       client_lost_cnnct[i] = 0;
       client_dt[i].is_just_leave = 1;
-      // client_dt[i].is_connected = true;
       client_fds[i] = 0;
       return 0;
     }
@@ -151,8 +143,6 @@ int clear_client() {
 
 void *handle_clients(void *arg) {
   // int new_socket;
-  // client_lost_cnnct = (int *)shmat(shmid_lost, NULL, 0);
-  // client_dt = (client_data *)shmat(shmid_clients, NULL, 0);
   signal(SIGCHLD, reaper);
   signal(SIGINT, cleanup);
   while (true) {
@@ -180,7 +170,6 @@ void *handle_clients(void *arg) {
       client_lost_cnnct = (int *)shmat(shmid_lost, NULL, 0);
       client_dt = (client_data *)shmat(shmid_clients, NULL, 0);
       close(server_fd);
-      // recieve_messages(new_socket);
       while (true) {
         int nbytes = recv(new_socket, msg.text, sizeof(msg.text), 0);
         msg.text[nbytes] = '\0';
@@ -190,7 +179,6 @@ void *handle_clients(void *arg) {
             if (client_fds[j] == new_socket) {
               client_lost_cnnct[j] = -1;
             }
-            // clear_client();
           }
         } else if (nbytes < 0) {
           // Error reading from client
@@ -202,6 +190,7 @@ void *handle_clients(void *arg) {
           std::cerr << "Failed to send message to queue\n";
         }
       }
+      close(new_socket);
       exit(0);
     } else if (pid < 0) {
       // Fork error
@@ -209,20 +198,21 @@ void *handle_clients(void *arg) {
       exit(EXIT_FAILURE);
     } else {
       // Parent process continues to accept new connections
-      // close all connections
     }
   }
+  pthread_exit(NULL);
 }
 // close fd
 void *handle_lost_connection(void *arg) {
   while (true) {
+    usleep(10000);
     clear_client();
   }
+  pthread_exit(NULL);
 }
 
 int main() {
 
-  // int clnts_shmid;
   // Create shared memory segment for client file descriptors
   key = ftok("server", 'R');
   shmid = shmget(key, SHM_SIZE, 0666 | IPC_CREAT);
@@ -261,8 +251,8 @@ int main() {
   }
 
   if (getsockname(server_fd, (sockaddr *)&address, (socklen_t *)&addrlen)) {
-    perror("Server binding failure\n");
-    exit(EXIT_FAILURE);
+    std::cerr << "Server binding failure\n";
+    return 1;
   }
   std::cout << "server is ready, port: " << ntohs(address.sin_port)
             << std::endl;
@@ -270,23 +260,23 @@ int main() {
   // Start listening for connections
   if (listen(server_fd, MAX_CLIENTS) < 0) {
     std::cerr << "Listen error\n";
-    exit(EXIT_FAILURE);
+    return 1;
   }
 
   pthread_t bcast_thread, handle_cl_thread, check_lost_connections_thread;
   // Start the broadcast thread
   if (pthread_create(&bcast_thread, NULL, broadcast, NULL) < 0) {
-    perror("Error creating receive thread");
-    exit(EXIT_FAILURE);
+    std::cerr << "Error creating bcast thread\n";
+    return 1;
   }
   if (pthread_create(&handle_cl_thread, NULL, handle_clients, NULL) < 0) {
-    perror("Error creating receive thread");
-    exit(EXIT_FAILURE);
+    std::cerr << "Error creating client-handle thread\n";
+    return 1;
   }
   if (pthread_create(&check_lost_connections_thread, NULL,
                      handle_lost_connection, NULL) < 0) {
-    perror("Error creating receive thread");
-    exit(EXIT_FAILURE);
+    std::cerr << "Error creating disconnected client handle thread\n";
+    return 1;
   }
   //   Wait for the threads to finish
   pthread_join(check_lost_connections_thread, NULL);
@@ -295,15 +285,6 @@ int main() {
 
   signal(SIGINT, cleanup);
   signal(SIGCHLD, reaper);
-
-  // Detach and remove shared memory segment
-  shmdt(client_fds);
-  shmctl(shmid, IPC_RMID, NULL);
-  shmctl(shmid_lost, IPC_RMID, NULL);
-
-  // Remove message queue
-  msgctl(msgid, IPC_RMID, NULL);
-  pthread_exit(NULL);
 
   return 0;
 }
